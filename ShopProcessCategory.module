@@ -1,0 +1,67 @@
+<?php
+
+class ShopManagerOrders extends WireData implements Module, ConfigurableModule {
+		
+	public static function getModuleInfo() {
+		return array(
+			'title' => 'Shop: '.__('Category Process', __FILE__),
+			'summary' => __('Allows to browse products in category by product properties', __FILE__),
+			'version' => 001,
+			'permanent' => false,
+			'singular' => true,
+			'permission' => 'shop-order',
+			'requires' => array()
+		);
+	}
+		
+	public function init() {
+
+	}
+	
+	static public function getModuleConfigInputfields(Array $data) {
+		// get modules
+		$modules = Wire::getFuel('modules');
+		// this is a container for fields, basically like a fieldset
+		$inputfields = new InputfieldWrapper();
+		// where to look
+		 		
+		return $inputfields;
+	}
+	
+	public function ___execute() {
+		if($this->input->urlSegment1) {
+			$segments = array();
+			$i = 1;
+			while($segment = $this->input->urlSegment($i)) {
+				$segments[] = $segment;
+				$i++;
+			}
+			return $this->pages->children('template=shop_product%, shop_product_manufacturer='.$segment[0].', sort=title');
+		} else {
+			return $this->pages->children('template=shop_product%, sort=title');
+		}
+	}
+	
+	public function ___install() {
+		$pages = $this->fuel('pages');
+		$fields = $this->fuel('fields');
+		$modules = $this->fuel('modules');
+		
+		$field = $modules->get('FieldtypeModule');
+		$field->name = 'shop_category_process';
+		$field->label = __('Shop: Category Process', __FILE__);
+		$field->flags = Field::flagSystem;
+		$field->save();
+		$this->message("Created field: ".$field->name); 
+	}
+	
+	public function ___uninstall() {
+		$fields = $this->fuel('fields');
+		$field = $fields->get('shop_category_process');
+		if($field->id) {
+			$name = $field->id;
+			$fields->delete($field);
+			$this->message("Deleted field: ".$name);
+		}
+	}	
+}
