@@ -1,0 +1,221 @@
+<?php
+
+class ShopProcessCart extends Process implements Module, ConfigurableModule {
+		
+	protected $field_name = 'shop_process';	
+	protected $template_name = "shop_cart";
+	
+	public static function getModuleInfo() {
+		return array(
+			'title' => 'Shop: '.__('Cart Process', __FILE__),
+			'summary' => __('Provides shopping cart functionality', __FILE__),
+			'version' => 001,
+			'permanent' => false,
+			'singular' => true,
+			'permission' => 'shop-order',
+			'requires' => array()
+		);
+	}
+		
+	public function init() {
+
+	}
+	
+	static public function getModuleConfigInputfields(Array $data) {
+		// get modules, fields, templates
+		$modules = Wire::getFuel('modules');
+		$fields = Wire::getFuel('fields');
+		$templates = Wire::getFuel('templates');
+		// this is a container for fields, basically like a fieldset
+		$inputfields = new InputfieldWrapper();
+		 		
+		return $inputfields;
+	}
+	
+	public function ___execute() {
+		$selector = "";
+		if(count($this->allowed_templates)) {
+			$selector .= "template=".implode("|", $this->allowed_templates);
+		}
+		if($this->input->urlSegment1) {
+			$segments = array();
+			$i = 1;
+			$segment = 'urlSegment'.$i;
+			while($str = $this->input->$segment) {
+				$field_name = 'segment_field_'.$i;
+				if(!empty($this->$field_name)) {
+					$field = $this->fields->get($this->$field_name);
+					if($value = $this->transformValue(&$field, $str)) {
+						$selector .= ", ".$field->name."=".$value;
+						$i++;
+						$segment = 'urlSegment'.$i;
+					}
+				} else {
+					break;
+				}
+			}
+		}
+		return $this->page->children($selector);
+	}
+	
+	public function ___executeAdd() {
+		$post_array = $_POST;
+		$field_name = array_shift(array_keys($post_array));
+		$product_id = array_shift($post_array);
+		$product = $this->pages->get($field_name.'='.$product_id);
+		if($product->id) {
+			echo $product->title;
+		} else {
+			$this->message($this->_('WasnÕt able to add product to cart because of invalid product ID.'));
+		}
+		
+	}
+	
+	public function ___install() {
+		$pages = $this->fuel('pages');
+		$fields = $this->fuel('fields');
+		$modules = $this->fuel('modules');
+		
+		// check for shop_process field and create if not existing
+		$field = $fields->get($this->field_name);
+		if(!$field->id) {
+			$field = new Field();	
+			$field->type = $this->fuel('modules')->get("FieldtypeModule"); 
+			$field->name = $this->field_name;
+			$field->label = 'Shop: Process';
+			$field->moduleTypes = array('Process');
+			$field->instantiateModule = true;
+			$field->flags = Field::flagSystem;
+			$field->save();
+			$this->message("Created field: ".$field->name);
+		} else {
+			$this->message("Field ".$this->field_name." is already set up");
+		} 
+		// cart template fieldgroup
+		$fieldgroup = new Fieldgroup();
+		$fieldgroup->name = $this->template_name;
+		$fieldgroup->add($fields->get('title'));
+		$fieldgroup->add($field);
+		$fieldgroup->save();
+		// cart template
+		// create the template used by Language pages
+		$template = new Template();	
+		$template->name = $this->template_name;
+		$template->slashUrls = 1; 
+		$template->pageLabelField = 'name';
+		$template->noGlobal = 1; 
+		$template->noMove = 1; 
+		$template->noTrash = 1; 
+		$template->noUnpublish = 1; 
+		$template->noChangeTemplate = 1; 
+		$template->nameContentTab = 1; 
+		$template->urlSegments = 1;
+		$template->flags = Template::flagSystem;
+		$template->fieldgroup = $fieldgroup; 
+		$template->save();
+		$this->message('Created template: '.$template->name);
+		// cart page
+		$cart = new Page($template);
+		$cart->name = 'cart';
+		$cart->title = 'Shopping Cart';
+		$cart->shop_process = $this;
+		$cart->parent = $pages->get('/');
+		$cart->status = Page::statusSystem;	
+		$cart->save();
+		$this->message('Created page: '.$cart->path);
+
+		// cart item template fieldgroup
+		$fieldgroup = new Fieldgroup();
+		$fieldgroup->name = $this->template_name.'_item';	
+		$fieldgroup->add($fields->get('title'));			
+		// cart item product field
+		$field = new Field();	
+		$field->type = $this->fuel('modules')->get("FieldtypePage"); 
+		$field->name = $this->template_name.'_product';
+		$field->label = 'Shop: Cart Product Page Reference';
+		$field->flags = Field::flagSystem;
+		$field->save();
+		$fieldgroup->add($field);		
+		$this->message("Created field: ".$template->name.'_product');
+		// cart item options field
+		$field = new Field();
+		$field->type = $this->fuel('modules')->get("FieldtypeText"); 
+		$field->name = $this->template_name.'_options';
+		$field->label = 'Shop: Cart Product Options';
+		$field->flags = Field::flagSystem;
+		$field->save();
+		$fieldgroup->add($field);
+		$this->message("Created field: ".$template->name.'_options');		
+		$fieldgroup->save();
+		// cart template
+		$template_item = new Template();	
+		$template_item->name = $this->template_name.'_item';
+		$template_item->slashUrls = 1; 
+		$template_item->pageLabelField = 'name';
+		$template_item->noGlobal = 1; 
+		$template_item->noMove = 1; 
+		$template_item->noTrash = 1; 
+		$template_item->noUnpublish = 1; 
+		$template_item->noChangeTemplate = 1; 
+		$template_item->nameContentTab = 1; 
+		$template_item->flags = Template::flagSystem;
+		$template_item->fieldgroup = $fieldgroup;
+		$template_item->parentTemplates = array($template); 
+		$template_item->save();
+		$this->message('Created template: '.$template_item->name);
+		// config cart template
+		$template->childTemplates = array($template_item);
+		$template->save();
+	}
+	
+	public function ___uninstall() {
+		$fields = $this->fuel('fields');
+		$fieldgroups = $this->fuel('fieldgroups');
+		$templates = $this->fuel('templates');
+		$pages = $this->fuel('pages');
+		// delete pages
+		$cart = $pages->get('template='.$this->template_name);
+		if($cart->id) {
+			$cart->status = Page::statusSystemOverride;
+			$cart->status = 0;
+			$cart->save();
+			$pages->delete($cart, true);
+		}
+		// delete templates && field groups
+		$template_names = array(
+			$this->template_name,
+			$this->template_name.'_item'
+		);
+		foreach($template_names as $template_name) {
+			$template = $templates->get($template_name);
+			if($template->name) {
+				$template->flags = Field::flagSystemOverride;
+				$template->flags = 0;
+				$template->save();			
+				if($templates->delete($template)) {
+					$fieldgroups->delete($fieldgroups->get($template_name));
+				}
+			}
+		}
+		
+		// delete fields
+		$fieldnames = array(
+			$this->field_name,
+			$this->template_name.'_product',
+			$this->template_name.'_options'
+		);
+		foreach($fieldnames as $fieldname) {
+			$field = $fields->get($fieldname);
+			if($field->id && count($pages->find($fieldname.'>=null')) == 0) {
+				$name = $field->id;
+				$field->flags = Field::flagSystemOverride;
+				$field->flags = 0;
+				$field->save();				
+				$fields->delete($field);
+				$this->message("Deleted field: ".$name);
+			} else {
+				$this->message("Left field ".$fieldname." because itÕs still in use");
+			}
+		}		
+	}	
+}

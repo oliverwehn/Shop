@@ -2,7 +2,7 @@
 
 class ShopProcessCategory extends Process implements Module, ConfigurableModule {
 		
-	protected $field_name = 'shop_category_process';	
+	protected $field_name = 'shop_process';	
 		
 	public static function getModuleInfo() {
 		return array(
@@ -122,24 +122,34 @@ class ShopProcessCategory extends Process implements Module, ConfigurableModule 
 		$fields = $this->fuel('fields');
 		$modules = $this->fuel('modules');
 		
-		$field = new Field();	
-		$field->type = $this->fuel('modules')->get("FieldtypeModule"); 
-		$field->name = $this->fieldName;
-		$field->label = 'Shop: Category Process';
-		$field->moduleTypes = array('Process');
-		$field->instantiateModule = true;
-		$field->flags = Field::flagSystem;
-		$field->save();
-		$this->message("Created field: ".$field->name); 
+		if(!$field->id) {
+			$field = new Field();	
+			$field->type = $this->fuel('modules')->get("FieldtypeModule"); 
+			$field->name = $this->field_name;
+			$field->label = 'Shop: Process';
+			$field->moduleTypes = array('Process');
+			$field->instantiateModule = true;
+			$field->flags = Field::flagSystem;
+			$field->save();
+			$this->message("Created field: ".$field->name);
+		} else {
+			$this->message("Field ".$this->field_name." is already set up");
+		} 
 	}
 	
 	public function ___uninstall() {
 		$fields = $this->fuel('fields');
 		$field = $fields->get($this->field_name);
-		if($field->id) {
+		$pages = $this->fuel('pages');
+		if($field->id && count($pages->find($this->field_name.'>=null')) == 0) {
 			$name = $field->id;
+			$field->flags = Field::flagSystemOverride;
+			$field->flags = 0;
+			$field->save();
 			$fields->delete($field);
 			$this->message("Deleted field: ".$name);
+		} else {
+			$this->message("Left field ".$this->field_name." because itÕs still in use");
 		}
 	}	
 }
