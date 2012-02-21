@@ -2,6 +2,8 @@
 
 class ShopProcessCategory extends Process implements Module, ConfigurableModule {
 		
+	protected $field_name = 'shop_category_process';	
+		
 	public static function getModuleInfo() {
 		return array(
 			'title' => 'Shop: '.__('Category Process', __FILE__),
@@ -19,29 +21,100 @@ class ShopProcessCategory extends Process implements Module, ConfigurableModule 
 	}
 	
 	static public function getModuleConfigInputfields(Array $data) {
-		// get modules
+		// get modules, fields, templates
 		$modules = Wire::getFuel('modules');
+		$fields = Wire::getFuel('fields');
+		$templates = Wire::getFuel('templates');
 		// this is a container for fields, basically like a fieldset
 		$inputfields = new InputfieldWrapper();
-		// where to look
+		// basic page selector
+		$field = $modules->get('InputfieldSelectMultiple');
+		$field->name = 'allowed_templates';
+		$field->label = 'What templates to look for?';
+		foreach($templates as $template) {
+			$field->addOption($template->name, $field->template);
+		}
+		$field->value = isset($data['allowed_templates'])?$data['allowed_templates']:array();
+		$inputfields->add($field);
+		
+		// default field for segments
+		for($i=1; $i<=3; $i++) {
+			$field = $modules->get('InputfieldSelect');
+			$field->name = 'segment_field_'.$i;
+			$field->label = 'Default field for urlSegment'.$i;
+			foreach($fields as $f) {
+				$field->addOption($f->id, $f->name);
+			}
+			$field->value = $data['segment_field_'.$i];
+			$inputfields->add($field);
+		}
 		 		
 		return $inputfields;
 	}
+	/**
+	 * Override default segment fields
+	 * @param $data: Array containing field names, field IDs or field objects, up to 3, one for each possible urlSegment
+	 * @return bool: true
+	 */
+	public function setSegmentFields(Array $data) {
+		$i = 1;
+		foreach($data as $f) {
+			$name = 'segment_field_'.$i;
+			if($f instanceof Field) {
+				$this->$name = $f->id;
+			} else {
+				$field = $this->fields->get($f);
+				if($field->id) {
+					$this->$name = $field->id;
+				} else {
+					break;
+					
+					return false;
+				}
+			}
+			$i++;
+		}
+		return true;
+	}
 	
 	public function ___execute() {
+		$selector = "";
+		if(count($this->allowed_templates)) {
+			$selector .= "template=".implode("|", $this->allowed_templates);
+		}
 		if($this->input->urlSegment1) {
 			$segments = array();
 			$i = 1;
 			$segment = 'urlSegment'.$i;
 			while($str = $this->input->$segment) {
-				$segments[] = $str;
-				$i++;
-				$segment = 'urlSegment'.$i;
+				$field_name = 'segment_field_'.$i;
+				if(!empty($this->$field_name)) {
+					$field = $this->fields->get($this->$field_name);
+					if($value = $this->transformValue(&$field, $str)) {
+						$selector .= ", ".$field->name."=".$value;
+						$i++;
+						$segment = 'urlSegment'.$i;
+					}
+				} else {
+					break;
+				}
 			}
-		 	return $this->page->children('template=shop_product, shop_product_manufacturer='.$this->pages->get('name='.$segments[0])->id.', sort=title');
-		} else {
-			return $this->page->children('template=shop_product, sort=title');
 		}
+		return $this->page->children($selector);
+	}
+	
+	private function transformValue(Field $field, $value) {
+		switch($field->type) {
+			case 'FieldtypePage': {
+				$value = $this->pages->get('name='.$value)->id;
+				break;
+			}
+			default: {
+				$value = url_encode($value);
+				break;
+			}
+		}
+		return $value;
 	}
 	
 	public function ___install() {
@@ -51,7 +124,7 @@ class ShopProcessCategory extends Process implements Module, ConfigurableModule 
 		
 		$field = new Field();	
 		$field->type = $this->fuel('modules')->get("FieldtypeModule"); 
-		$field->name = 'shop_category_process';
+		$field->name = $this->fieldName;
 		$field->label = 'Shop: Category Process';
 		$field->moduleTypes = array('Process');
 		$field->instantiateModule = true;
@@ -62,7 +135,7 @@ class ShopProcessCategory extends Process implements Module, ConfigurableModule 
 	
 	public function ___uninstall() {
 		$fields = $this->fuel('fields');
-		$field = $fields->get('shop_category_process');
+		$field = $fields->get($this->field_name);
 		if($field->id) {
 			$name = $field->id;
 			$fields->delete($field);
