@@ -2,8 +2,18 @@
 
 class ShopProcessCart extends Process implements Module, ConfigurableModule {
 		
-	protected $field_name = 'shop_process';	
-	protected $template_name = "shop_cart";
+	protected $field_name = 'shop_process';	// name of the process field used for the cart process
+	protected $template_name = "shop_cart"; // name or prefix of the templates used for cart related pages
+    protected $delete_after = 30; // days guest carts are saved
+    
+    /**
+     * Session vars used (naming determined by $template_name)
+     * shop_cart_cleanedup: 0 or 1. Is set, when old guest carts have been cleand up.
+     * shop_cart_refreshed: 0 or 1. Is set, when a user returns and the cart items are checked in view of availability an price.
+     */
+    
+    // cart page
+    var $cart = null;
 	
 	public static function getModuleInfo() {
 		return array(
@@ -18,8 +28,73 @@ class ShopProcessCart extends Process implements Module, ConfigurableModule {
 	}
 		
 	public function init() {
-
+        $guest = $this->users->get($this->config->guestUserPageID);
+        $cookie_name = $this->template_name.'_identifier';
+        if($this->user->id != $guest->id) {
+            $cart = $this->pages->get('template='.$this->template_name.'_user, '.$this->template_name.'_user='.$this->user->id);
+            if($cart->id) {
+                $this->cart = $cart;
+            } else {
+                if(($this->input->cookie->$cookie_name) && (strlen($this->input->cookie->$cookie_name) == 32)) {
+                    $cart = $this->pages->get('template='.$this->template_name.', '.$this->template_name.'_user=NULL, '.$this->template_name.'_identifier='.$this->input->cookie->$cookie_name);
+                    if($cart->id) {
+                        $cart->set($this->template_name.'_user', $this->user->id);
+                        $cart->title = 'User '.$this->user->id;
+                        $cart->name = $this->fuel('sanitizer')->pageName($cart->title, $cart->settings['name']);
+                        $cart->save();
+                        $this->cart = $cart;
+                    }
+                    setcookie ($this->template_name.'_identifier', "", time()-86400, "/");
+                }
+                if($this->cart === NULL) {
+                    $cart_parent = $this->pages->get('template='.$this->template_name);
+                    if($cart_parent->id) {
+                        $identifier = md5($this->user->id.'_'.date('Y.m.d_H:i:s'));
+                        $cart = new Page($this->templates->get($this->template_name.'_user'));
+                        $cart->parent = $cart_parent;
+                        $cart->title = 'User '.$this->user->id;
+                        $cart->name = $this->fuel('sanitizer')->pageName($cart->title, $cart->settings['name']);
+                        $cart->set($this->template_name.'_user', $this->user->id);
+                        $cart->set($this->template_name.'_identifier', $identifier);
+                        $cart->save();
+                        $this->cart = $cart;
+                    } else {
+                        throw new WireException('Wasn’t able to locate cart parent page.');
+                    }
+                }
+            }
+        } else {
+            if(($this->input->cookie->$cookie_name) && (strlen($this->input->cookie->$cookie_name) == 32)) {
+                $cart = $this->pages->get('template='.$this->template_name.'_user, '.$this->template_name.'_user=, '.$this->template_name.'_identifier='.$this->input->cookie->$cookie_name);
+                echo "<br />".$cart->id;
+                if($cart->id) {
+                    $this->cart = $cart;
+                } else {
+                    setcookie ($this->template_name.'_identifier', "", time()-86400, "/");
+                }
+            } 
+            if($this->cart === NULL) {
+                $cart_parent = $this->pages->get('template='.$this->template_name);
+                if($cart_parent->id) {
+                    $identifier = md5(rand().'_'.date('Y.m.d_H:i:s'));
+                    $cart = new Page($this->templates->get($this->template_name.'_user'));
+                    $cart->parent = $cart_parent;
+                    $cart->title = 'Guest';
+                    $cart->name = $this->fuel('sanitizer')->pageName($identifier, $cart->settings['name']);
+                    $cart->set($this->template_name.'_identifier', $identifier);
+                    $cart->save();
+                    $cart->name = $this->fuel('sanitizer')->pageName($cart->title.'_'.$cart->id, $cart->settings['name']);
+                    $cart->save();
+                    $this->cart = $cart;
+                    setcookie ($this->template_name.'_identifier', $identifier, time()+365*86400, "/");
+                } else {
+                    throw new WireException('Wasn’t able to locate cart parent page.');
+                } 
+            }
+        }echo "<h1>".$cart->name."</h1>";
 	}
+
+    
 	
 	static public function getModuleConfigInputfields(Array $data) {
 		// get modules, fields, templates
@@ -55,14 +130,18 @@ class ShopProcessCart extends Process implements Module, ConfigurableModule {
 				}
 			}
 		}
+        // use the opportunity to delete old guest carts 
+        if($this->session->get($this->template_name.'_cleanedup')) {
+            $this->deleteGuestCarts();
+            $this->session->set($this->template_name.'_cleanedup', 1);
+        }        
 		return $this->page->children($selector);
 	}
 	
 	public function ___executeAdd() {
-		$post_array = $_POST;
-		$field_name = array_shift(array_keys($post_array));
-		$product_id = array_shift($post_array);
-		$product = $this->pages->get($field_name.'='.$product_id);
+		$product_id = (int) $this->input->post->product_id;
+        $qty = (int) $this->input->post->qty;
+        $product = $this->pages->get($product_id);
 		if($product->id) {
 			echo $product->title;
 		} else {
@@ -70,12 +149,26 @@ class ShopProcessCart extends Process implements Module, ConfigurableModule {
 		}
 		
 	}
+    
+    private function deleteGuestCarts() {
+        $older_than = time() - ($this->delete_after * 86400);
+        $carts = $this->pages->find('template='.$this->template_name.'_user, '.$this->template_name.'_user=, created<'.$older_than);
+        echo "<br />".count($carts)."<br />";
+        $deleted = 0;
+        foreach($carts as $cart) {
+            if($this->pages->delete($cart, true)) {
+                $deleted++;
+            }
+        }
+        return $deleted; 
+    }
 	
 	public function ___install() {
 		$pages = $this->fuel('pages');
 		$fields = $this->fuel('fields');
 		$modules = $this->fuel('modules');
-		
+		$templates = $this->fuel('templates');
+        
 		// check for shop_process field and create if not existing
 		$field = $fields->get($this->field_name);
 		if(!$field->id) {
@@ -102,7 +195,7 @@ class ShopProcessCart extends Process implements Module, ConfigurableModule {
 		$template = new Template();	
 		$template->name = $this->template_name;
 		$template->slashUrls = 1; 
-		$template->pageLabelField = 'name';
+		$template->pageLabelField = 'title';
 		$template->noGlobal = 1; 
 		$template->noMove = 1; 
 		$template->noTrash = 1; 
@@ -124,13 +217,57 @@ class ShopProcessCart extends Process implements Module, ConfigurableModule {
 		$cart->save();
 		$this->message('Created page: '.$cart->path);
 
+        // cart user template for user cart pages
+        $template_user = new Template(); 
+        $template_user->name = $this->template_name.'_user';        
+        $fieldgroup = new Fieldgroup();
+        $fieldgroup->name = $template_user->name;
+        $fieldgroup->add($fields->get('title'));
+        // user page reference
+        $field = new Field();
+        $field->type = $modules->get('FieldtypePage');
+        $field->name = $this->template_name.'_user';
+        $field->label = 'Shop: Cart User Page Reference';
+        $field->flags = Field::flagSystem;
+        $field->template_id = $templates->get('user')->id;
+        $field->derefAdPage = 1; 
+        $field->save();
+        $fieldgroup->add($field);       
+        $this->message("Created field: ".$this->template_name.'_user');
+        // cookie identifier
+        $field = new Field();
+        $field->type = $modules->get('FieldtypeText');
+        $field->name = $this->template_name.'_identifier';
+        $field->label = 'Shop: Cart Identifier String';
+        $field->flags = Field::flagSystem;
+        $field->maxlength = 32; 
+        $field->save();
+        $fieldgroup->add($field);       
+        $this->message("Created field: ".$this->template_name.'_identifier');        
+        // cart user template
+        $template_user->slashUrls = 1; 
+        $template_user->pageLabelField = 'title';
+        $template_user->noGlobal = 1; 
+        $template_user->noMove = 1; 
+        $template_user->noTrash = 1; 
+        $template_user->noUnpublish = 1; 
+        $template_user->noChangeTemplate = 1; 
+        $template_user->nameContentTab = 1; 
+        $template_user->urlSegments = 1;
+        $template_user->flags = Template::flagSystem;
+        $template_user->fieldgroup = $fieldgroup; 
+        $template_user->parentTemplates = array($templates->get($this->template_name)->id);
+        $template_user->childTemplates = array($templates->get($this->template_name.'_item')->id);        
+        $template_user->save();
+        $this->message('Created template: '.$template_user->name);
+
 		// cart item template fieldgroup
 		$fieldgroup = new Fieldgroup();
 		$fieldgroup->name = $this->template_name.'_item';	
 		$fieldgroup->add($fields->get('title'));			
 		// cart item product field
 		$field = new Field();	
-		$field->type = $this->fuel('modules')->get("FieldtypePage"); 
+		$field->type = $modules->get("FieldtypePage"); 
 		$field->name = $this->template_name.'_product';
 		$field->label = 'Shop: Cart Product Page Reference';
 		$field->flags = Field::flagSystem;
@@ -139,7 +276,7 @@ class ShopProcessCart extends Process implements Module, ConfigurableModule {
 		$this->message("Created field: ".$template->name.'_product');
 		// cart item options field
 		$field = new Field();
-		$field->type = $this->fuel('modules')->get("FieldtypeText"); 
+		$field->type = $modules->get("FieldtypeText"); 
 		$field->name = $this->template_name.'_options';
 		$field->label = 'Shop: Cart Product Options';
 		$field->flags = Field::flagSystem;
@@ -156,15 +293,16 @@ class ShopProcessCart extends Process implements Module, ConfigurableModule {
 		$template_item->noMove = 1; 
 		$template_item->noTrash = 1; 
 		$template_item->noUnpublish = 1; 
-		$template_item->noChangeTemplate = 1; 
+		$template_item->noChangeTemplate = 1;
+		$template_item->noChildren = 1; 
 		$template_item->nameContentTab = 1; 
 		$template_item->flags = Template::flagSystem;
 		$template_item->fieldgroup = $fieldgroup;
-		$template_item->parentTemplates = array($template); 
+		$template_item->parentTemplates = array($template_user->id); 
 		$template_item->save();
 		$this->message('Created template: '.$template_item->name);
 		// config cart template
-		$template->childTemplates = array($template_item);
+		$template->childTemplates = array($template_user->id);
 		$template->save();
 	}
 	
